@@ -1,0 +1,15 @@
+{
+  "name": "iphone-stock-watcher",
+  "version": "1.0.0",
+  "scripts": {
+    "check": "node check.mjs"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "playwright": "^1.63.0"
+  },
+  "type": "module"
+}
