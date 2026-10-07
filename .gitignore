@@ -2,3 +2,5 @@ node_modules/
 .playwright-mcp/
 .ntfy-topic
 logs/
+.wrangler/
+worker/node_modules/
