@@ -6,10 +6,20 @@ compatibility_date = "2026-09-01"
 crons = ["*/15 * * * *"]
 
 [vars]
-PART = "MJR54VC/A"
 POSTAL = "L7A 4S6"
 ALERT_ON_PICKUP = "false"
 
 [observability]
 enabled = true
 # Secrets: npx wrangler secret put NTFY_TOPIC / NTFY_TOKEN (ntfy.sh access token)
+
+# iPhone 18 Pro 6.3" 256GB models to watch (Canada part numbers). Alert fires if any is fast.
+[[vars.MODELS]]
+part = "MJR54VC/A"
+name = "Black"
+url = "https://www.apple.com/ca/shop/buy-iphone/iphone-18-pro/6.3-inch-display-256gb-black"
+
+[[vars.MODELS]]
+part = "MJR84VC/A"
+name = "Glacier Blue"
+url = "https://www.apple.com/ca/shop/buy-iphone/iphone-18-pro/6.3-inch-display-256gb-glacier"

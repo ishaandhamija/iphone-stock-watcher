@@ -1,5 +1,5 @@
 // Cloudflare Worker: every 15 min, checks Apple Canada for fast delivery
-// (2-hr / today / tomorrow) of one iPhone to a postal code; pushes an alert via ntfy.sh.
+// (2-hr / today / tomorrow) of one or more iPhone models to a postal code; alerts via Telegram.
 // No browser needed: setting Apple's location cookie first makes delivery-message return
 // quotes for the postal code.
 
@@ -22,18 +22,11 @@ async function appleGet(path, cookie) {
   return { status: res.status, text, setCookies };
 }
 
-export async function check(env) {
-  const part = env.PART || 'MJR54VC/A';
-  const postal = env.POSTAL || 'L7A 4S6';
-  const q = encodeURIComponent;
+const DEFAULT_MODELS = [
+  { part: 'MJR54VC/A', name: 'Black', url: 'https://www.apple.com/ca/shop/buy-iphone/iphone-18-pro/6.3-inch-display-256gb-black' },
+];
 
-  const upd = await appleGet(`/address/location/update?geoLocated=false&postalCode=${q(postal)}`, '');
-  const cookie = upd.setCookies.map((c) => c.split(';')[0]).join('; ');
-
-  const del = await appleGet(`/delivery-message?parts.0=${q(part)}&mt=regular&little=false&postalCode=${q(postal)}`, cookie);
-  if (del.status !== 200 || !del.text.startsWith('{')) throw new Error(`Apple delivery HTTP ${del.status}: ${del.text.slice(0, 150)}`);
-  const d = JSON.parse(del.text).body.content.deliveryMessage?.[part]?.regular || {};
-
+function fastReasons(d) {
   const texts = [
     ...(d.deliveryOptionMessages || []).map((m) => m.displayName),
     ...(d.deliveryOptions || []).flatMap((o) => [o.displayName, o.date]),
@@ -44,30 +37,50 @@ export async function check(env) {
   const reasons = [];
   if (d.idl === true) reasons.push('2-hr delivery available');
   if (d.stickyMessageIDL && !/unavailable/i.test(d.stickyMessageIDL)) reasons.push(strip(d.stickyMessageIDL));
-  const fast = texts.find((t) => FAST_TEXT.test(t));
-  if (fast) reasons.push(fast);
+  const fast = texts.filter((t) => FAST_TEXT.test(t));
+  reasons.push(...fast);
   if (earliest && earliest <= torontoDate(1)) reasons.push(`delivery by ${earliest}`);
-
-  let pickupToday = [];
-  if (env.ALERT_ON_PICKUP === 'true') {
-    const pk = await appleGet(`/retail/pickup-message?pl=true&parts.0=${q(part)}&location=${q(postal)}`, cookie);
-    if (pk.status === 200 && pk.text.startsWith('{')) {
-      pickupToday = (JSON.parse(pk.text).body.stores || [])
-        .filter((s) => /today/i.test(s.partsAvailability?.[part]?.pickupSearchQuote || ''))
-        .map((s) => `${s.storeName} (${s.storedistance} km)`);
-    }
-  }
-
-  return {
-    time: new Date().toISOString(), part, postal,
-    postalApplied: d.address?.postalCode === postal,
-    delivery: [...new Set(texts)], idl: d.idl, stickyIDL: d.stickyMessageIDL, earliest,
-    fast: reasons.length > 0, reasons: [...new Set(reasons)], pickupToday,
-  };
+  return { texts: [...new Set(texts)], earliest, reasons: [...new Set(reasons)] };
 }
 
-async function notify(env, title, message, priority = 'urgent') {
-  const link = env.PRODUCT_URL || 'https://www.apple.com/ca/shop/buy-iphone/iphone-18-pro/6.3-inch-display-256gb-black';
+export async function check(env) {
+  const models = env.MODELS?.length ? env.MODELS : DEFAULT_MODELS;
+  const postal = env.POSTAL || 'L7A 4S6';
+  const q = encodeURIComponent;
+
+  const upd = await appleGet(`/address/location/update?geoLocated=false&postalCode=${q(postal)}`, '');
+  const cookie = upd.setCookies.map((c) => c.split(';')[0]).join('; ');
+
+  // One request covers all models: parts.0, parts.1, ...
+  const partsQs = models.map((m, i) => `parts.${i}=${q(m.part)}`).join('&');
+  const del = await appleGet(`/delivery-message?${partsQs}&mt=regular&little=false&postalCode=${q(postal)}`, cookie);
+  if (del.status !== 200 || !del.text.startsWith('{')) throw new Error(`Apple delivery HTTP ${del.status}: ${del.text.slice(0, 150)}`);
+  const dm = JSON.parse(del.text).body.content.deliveryMessage || {};
+
+  let stores = [];
+  if (env.ALERT_ON_PICKUP === 'true') {
+    const pq = models.map((m, i) => `parts.${i}=${q(m.part)}`).join('&');
+    const pk = await appleGet(`/retail/pickup-message?pl=true&${pq}&location=${q(postal)}`, cookie);
+    if (pk.status === 200 && pk.text.startsWith('{')) stores = JSON.parse(pk.text).body.stores || [];
+  }
+
+  const results = models.map((m) => {
+    const d = dm[m.part]?.regular || {};
+    const { texts, earliest, reasons } = fastReasons(d);
+    const pickupToday = stores
+      .filter((s) => /today/i.test(s.partsAvailability?.[m.part]?.pickupSearchQuote || ''))
+      .map((s) => `${s.storeName} (${s.storedistance} km)`);
+    return {
+      ...m, product: strip(d.subHeader || '').replace(/^For\s+/, ''), postalApplied: d.address?.postalCode === postal,
+      delivery: texts, idl: d.idl, stickyIDL: d.stickyMessageIDL, earliest,
+      fast: reasons.length > 0, reasons, pickupToday,
+    };
+  });
+
+  return { time: new Date().toISOString(), postal, anyFast: results.some((r) => r.fast), results };
+}
+
+async function notify(env, title, message, priority = 'urgent', link = '') {
   // Telegram (preferred): ntfy.sh rate-limits by IP and Workers share IPs, so its free quota is exhausted.
   if (env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID) {
     const res = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
@@ -75,8 +88,8 @@ async function notify(env, title, message, priority = 'urgent') {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         chat_id: env.TELEGRAM_CHAT_ID,
-        text: `${priority === 'urgent' ? '🚨 ' : ''}${title}\n${message}\n${link}`,
-        disable_notification: false,
+        text: `${priority === 'urgent' ? '🚨 ' : ''}${title}\n\n${message}`,
+        disable_web_page_preview: true,
       }),
     });
     const body = await res.text();
@@ -86,7 +99,7 @@ async function notify(env, title, message, priority = 'urgent') {
   if (!env.NTFY_TOPIC) return console.log('no notifier configured; would send:', title, message);
   const res = await fetch(`https://ntfy.sh/${encodeURIComponent(env.NTFY_TOPIC)}`, {
     method: 'POST', body: message,
-    headers: { Title: title, Priority: priority, Tags: 'iphone,rotating_light', Click: link,
+    headers: { Title: title, Priority: priority, Tags: 'iphone,rotating_light', ...(link && { Click: link }),
       ...(env.NTFY_TOKEN && { Authorization: `Bearer ${env.NTFY_TOKEN}` }) },
   });
   const body = await res.text();
@@ -94,11 +107,33 @@ async function notify(env, title, message, priority = 'urgent') {
   return `ntfy HTTP ${res.status}`;
 }
 
+// e.g. "Black and Glacier Blue (both)" / "Glacier Blue only"
+function whichLabel(names, total) {
+  if (names.length === total && total > 1) return `${names.join(' and ')} (${total === 2 ? 'both' : 'all'})`;
+  return `${names.join(', ')} only`;
+}
+
+export function buildAlert(r) {
+  const fast = r.results.filter((x) => x.fast);
+  const lines = [`Available for fast delivery to ${r.postal}: ${whichLabel(fast.map((x) => x.name), r.results.length)}`, ''];
+  for (const x of fast) lines.push(`✅ ${x.name}: ${x.reasons.join(' | ')}`, x.url, '');
+  for (const x of r.results.filter((x) => !x.fast)) lines.push(`❌ ${x.name}: ${x.delivery[0] || 'no fast delivery'}`);
+  return { title: 'iPhone 18 Pro 256GB: FAST DELIVERY!', message: lines.join('\n').trim(), link: fast[0]?.url };
+}
+
 async function run(env) {
   const r = await check(env);
   console.log(JSON.stringify(r));
-  if (r.fast) await notify(env, 'iPhone 18 Pro 256GB Black: FAST DELIVERY!', `${r.postal}: ${r.reasons.join(' | ')}. Order now!`);
-  else if (r.pickupToday.length) await notify(env, 'iPhone 18 Pro: pickup today', r.pickupToday.join(', '), 'high');
+  if (r.anyFast) {
+    const a = buildAlert(r);
+    await notify(env, a.title, a.message, 'urgent', a.link);
+  } else {
+    const pick = r.results.filter((x) => x.pickupToday.length);
+    if (pick.length) {
+      await notify(env, 'iPhone 18 Pro 256GB: pickup today',
+        pick.map((x) => `${x.name}: ${x.pickupToday.join(', ')}\n${x.url}`).join('\n\n'), 'high', pick[0].url);
+    }
+  }
   return r;
 }
 
