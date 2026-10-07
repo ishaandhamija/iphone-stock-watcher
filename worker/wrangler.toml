@@ -3,7 +3,7 @@ main = "src/index.js"
 compatibility_date = "2026-09-01"
 
 [triggers]
-crons = ["*/5 * * * *"]
+crons = ["*/15 * * * *"]
 
 [vars]
 PART = "MJR54VC/A"

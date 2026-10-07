@@ -1,4 +1,4 @@
-// Cloudflare Worker: every 5 min, checks Apple Canada for fast delivery
+// Cloudflare Worker: every 15 min, checks Apple Canada for fast delivery
 // (2-hr / today / tomorrow) of one iPhone to a postal code; pushes an alert via ntfy.sh.
 // No browser needed: setting Apple's location cookie first makes delivery-message return
 // quotes for the postal code.
