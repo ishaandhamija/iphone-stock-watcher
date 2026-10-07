@@ -67,13 +67,27 @@ export async function check(env) {
 }
 
 async function notify(env, title, message, priority = 'urgent') {
-  if (!env.NTFY_TOPIC) return console.log('no NTFY_TOPIC; would send:', title, message);
+  const link = env.PRODUCT_URL || 'https://www.apple.com/ca/shop/buy-iphone/iphone-18-pro/6.3-inch-display-256gb-black';
+  // Telegram (preferred): ntfy.sh rate-limits by IP and Workers share IPs, so its free quota is exhausted.
+  if (env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID) {
+    const res = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: env.TELEGRAM_CHAT_ID,
+        text: `${priority === 'urgent' ? '🚨 ' : ''}${title}\n${message}\n${link}`,
+        disable_notification: false,
+      }),
+    });
+    const body = await res.text();
+    if (!res.ok) throw new Error(`Telegram HTTP ${res.status}: ${body.slice(0, 200)}`);
+    return `Telegram HTTP ${res.status}`;
+  }
+  if (!env.NTFY_TOPIC) return console.log('no notifier configured; would send:', title, message);
   const res = await fetch(`https://ntfy.sh/${encodeURIComponent(env.NTFY_TOPIC)}`, {
     method: 'POST', body: message,
-    headers: { Title: title, Priority: priority, Tags: 'iphone,rotating_light',
-      // ntfy rate-limits anonymous publishes per IP, and Workers share IPs, so publish as a user.
-      ...(env.NTFY_TOKEN && { Authorization: `Bearer ${env.NTFY_TOKEN}` }),
-      Click: env.PRODUCT_URL || 'https://www.apple.com/ca/shop/buy-iphone/iphone-18-pro/6.3-inch-display-256gb-black' },
+    headers: { Title: title, Priority: priority, Tags: 'iphone,rotating_light', Click: link,
+      ...(env.NTFY_TOKEN && { Authorization: `Bearer ${env.NTFY_TOKEN}` }) },
   });
   const body = await res.text();
   if (!res.ok) throw new Error(`ntfy HTTP ${res.status}: ${body.slice(0, 200)}`);
@@ -96,6 +110,14 @@ export default {
   async fetch(req, env) {
     const url = new URL(req.url);
     if (!env.NTFY_TOPIC || url.searchParams.get('key') !== env.NTFY_TOPIC) return new Response('ok');
+    if (url.searchParams.get('telegram') === 'chats') {
+      // Lists chats that have messaged the bot, to find TELEGRAM_CHAT_ID.
+      const r = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/getUpdates`);
+      const j = await r.json();
+      const chats = (j.result || []).map((u) => (u.message || u.my_chat_member || {}).chat).filter(Boolean)
+        .map((c) => ({ id: c.id, type: c.type, name: c.first_name || c.title, username: c.username }));
+      return Response.json({ ok: j.ok, description: j.description, chats });
+    }
     if (url.searchParams.get('test')) {
       try { return new Response(await notify(env, 'Test: iPhone watcher', 'Notifications are working.', 'default')); }
       catch (e) { return new Response(String(e), { status: 502 }); }
