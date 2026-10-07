@@ -153,6 +153,15 @@ export default {
         .map((c) => ({ id: c.id, type: c.type, name: c.first_name || c.title, username: c.username }));
       return Response.json({ ok: j.ok, description: j.description, chats });
     }
+    if (url.searchParams.get('test') === 'sample') {
+      // Real check, but pretend the first model has fast delivery, to preview the alert.
+      const r = await check(env);
+      r.results[0] = { ...r.results[0], fast: true,
+        reasons: ['Today from Store 10:30 a.m. to 12:30 p.m. — $13.00', 'Tomorrow — Free'] };
+      const a = buildAlert(r);
+      try { return new Response(await notify(env, `[SAMPLE, not real] ${a.title}`, a.message, 'urgent', a.link)); }
+      catch (e) { return new Response(String(e), { status: 502 }); }
+    }
     if (url.searchParams.get('test')) {
       try { return new Response(await notify(env, 'Test: iPhone watcher', 'Notifications are working.', 'default')); }
       catch (e) { return new Response(String(e), { status: 502 }); }
