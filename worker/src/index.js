@@ -154,10 +154,11 @@ export default {
       return Response.json({ ok: j.ok, description: j.description, chats });
     }
     if (url.searchParams.get('test') === 'sample') {
-      // Real check, but pretend the first model has fast delivery, to preview the alert.
+      // Real check, but pretend the first model (or all, with &all=1) has fast delivery, to preview the alert.
       const r = await check(env);
-      r.results[0] = { ...r.results[0], fast: true,
-        reasons: ['Today from Store 10:30 a.m. to 12:30 p.m. — $13.00', 'Tomorrow — Free'] };
+      const all = url.searchParams.get('all') === '1';
+      r.results = r.results.map((x, i) => (all || i === 0) ? { ...x, fast: true,
+        reasons: ['Today from Store 10:30 a.m. to 12:30 p.m. — $13.00', 'Tomorrow — Free'] } : x);
       const a = buildAlert(r);
       try { return new Response(await notify(env, `[SAMPLE, not real] ${a.title}`, a.message, 'urgent', a.link)); }
       catch (e) { return new Response(String(e), { status: 502 }); }
