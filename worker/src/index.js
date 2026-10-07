@@ -68,11 +68,16 @@ export async function check(env) {
 
 async function notify(env, title, message, priority = 'urgent') {
   if (!env.NTFY_TOPIC) return console.log('no NTFY_TOPIC; would send:', title, message);
-  await fetch(`https://ntfy.sh/${encodeURIComponent(env.NTFY_TOPIC)}`, {
+  const res = await fetch(`https://ntfy.sh/${encodeURIComponent(env.NTFY_TOPIC)}`, {
     method: 'POST', body: message,
     headers: { Title: title, Priority: priority, Tags: 'iphone,rotating_light',
+      // ntfy rate-limits anonymous publishes per IP, and Workers share IPs, so publish as a user.
+      ...(env.NTFY_TOKEN && { Authorization: `Bearer ${env.NTFY_TOKEN}` }),
       Click: env.PRODUCT_URL || 'https://www.apple.com/ca/shop/buy-iphone/iphone-18-pro/6.3-inch-display-256gb-black' },
   });
+  const body = await res.text();
+  if (!res.ok) throw new Error(`ntfy HTTP ${res.status}: ${body.slice(0, 200)}`);
+  return `ntfy HTTP ${res.status}`;
 }
 
 async function run(env) {
@@ -91,7 +96,10 @@ export default {
   async fetch(req, env) {
     const url = new URL(req.url);
     if (!env.NTFY_TOPIC || url.searchParams.get('key') !== env.NTFY_TOPIC) return new Response('ok');
-    if (url.searchParams.get('test')) { await notify(env, 'Test: iPhone watcher', 'Notifications are working.', 'default'); return new Response('test sent'); }
+    if (url.searchParams.get('test')) {
+      try { return new Response(await notify(env, 'Test: iPhone watcher', 'Notifications are working.', 'default')); }
+      catch (e) { return new Response(String(e), { status: 502 }); }
+    }
     try { return Response.json(await run(env)); } catch (e) { return new Response(String(e), { status: 502 }); }
   },
 };

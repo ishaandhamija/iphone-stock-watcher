@@ -12,4 +12,4 @@ ALERT_ON_PICKUP = "false"
 
 [observability]
 enabled = true
-# NTFY_TOPIC is a secret: npx wrangler secret put NTFY_TOPIC
+# Secrets: npx wrangler secret put NTFY_TOPIC / NTFY_TOKEN (ntfy.sh access token)
